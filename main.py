@@ -1,96 +1,82 @@
 import numpy as np
+from numpy.polynomial import chebyshev
 from numpy.polynomial.polynomial import Polynomial
-from scipy.integrate import quad
+import matplotlib.pyplot as plt
+
+def remez_method(n, func, eps):
+# шаг 1- выбрать стартовые точки (корни T[n+2](x))
+    T_coeff = np.zeros(n+3)
+    T_coeff[n+2] = 1
+    points = chebyshev.Chebyshev(T_coeff).roots()
+
+#шаг 2 - составить и решить СЛАУ, найти p[n], e
+    W = np.zeros((n+2, n+2))
+    f = np.zeros(n+2)
+    while 1:
+        str = 0
+        for x in points:
+            for i in range (n+1):
+                W[str][i] = x ** i
+            W[str][n + 1] = (-1) ** str
+            f[str] = func(x)
+            str += 1
+
+        sol = np.linalg.solve(W, f)
+        P = Polynomial(sol[0 : n+1])
+        e = sol[n+1]
+
+#шаг 3 - найти x* : f(x*) - p(x*) max на [-1, 1]
+        Q = func - P
+        Q_extremums = Q.deriv().roots()
+        if abs(Q(-1)) > abs(Q(1)):
+            argmax = -1
+            max = abs(Q(-1))
+        else:
+            argmax = 1
+            max = abs(Q(1))
+        for x in Q_extremums:
+            if (abs(x) <= 1) and (abs(Q(x)) > max):
+                max = abs(Q(x))
+                argmax = x
+
+#проверить условия останова
+        if abs(max - abs(e)) < eps:
+            return P
+
+#шаг 3 - замена точки
+        if argmax < points[0]:
+            if Q(argmax)*Q(points[0]) > 0:
+                points[0] = argmax
+            else:
+                points = np.delete(points, -1)
+                points = np.insert(points, 0, argmax)
+        elif argmax > points[n+1]:
+            if Q(argmax)*Q(points[n+1]) > 0:
+                points[n+1] = argmax
+            else:
+                points = np.delete(points, 0)
+                points = np.append(points, argmax)
+        else:
+            j = 0
+            while points[j] < argmax:
+                j += 1
+            if Q(argmax) * Q(points[j - 1]) > 0:
+                points[j - 1] = argmax
+            else:
+                points[j] = argmax
 
 
-def orthogonality_test(ort_system, deg, eps):
-    for i in range (deg):
-        result, _ = quad(lambda x: ort_system[i](x) * ort_system[i](x), -1, 1) #нормированность
-        if abs(result - 1.) > eps:
-            return False
-        for j in range (i+1, deg + 1):
-            result, _ = quad(lambda x: ort_system[i](x) * ort_system[j](x), -1, 1) #ортогональность
-            if abs(result) > eps:
-                return False
-        return True
-
-#с.зн. А - корни L[n] полинома
-def eigenvalues_test(L, eig_values, eps):
-    for a in eig_values:
-        if (abs(L(a)) > eps):
-            return False
-    return True
-
-#скалярное произведение (x^i, x^j) на (0, 1) с весом 1
-def gram_dot(x):
-    if (x % 2) == 1:
-        return 0
-    else:
-        return 2 / (x + 1)
-
-def Gram_Schmidt_method(deg):
-#матрица Грама для системы {1, x, ..., x^n}
-    G = np.zeros((deg+1, deg+1))
-    for i in range(deg+1):
-        for j in range(deg+1):
-            G[i, j] = gram_dot(i + j)
-#Разложение Холецкого с верхнетреугольной матрией G = (U*)U, искомая матрица: U^(-1)
-    U = np.linalg.inv(np.linalg.cholesky(G, upper=True))
-    ort_system = []
-    for j in range(deg + 1):
-        ort_system.append(Polynomial(U[:, j]))
-
-    return ort_system
+# test 1
+n = 5
+eps = 10e-5
+p = [0, -1, 0, 0, 1, 1]
+pol = Polynomial(p)
+res = remez_method(n - 2, pol, eps)
 
 
-def recurrence_method(deg):
-#найдем L0, L1
-    ort_system = []
-    ort_system.append(Polynomial([1/2 ** 0.5])) #L0 нормирован с весом 1 на (-1;1)
-#xL[0] = a[0]L[0] + b[0]L[1], найдем a[0], b[0]
-    t1, _ = quad(lambda x: ort_system[0](x) * ort_system[0](x) * x, -1, 1)
-    t2, _ = quad(lambda x: ort_system[0](x) * ort_system[0](x), -1, 1)
-    alpha = t1 / t2
-    alpha_vec = [alpha]
-    p = Polynomial([0., 1.]) * ort_system[0] - alpha * ort_system[0]
-    t, _ = quad(lambda x: p(x) * p(x), -1, 1)
-    beta = t ** 0.5 #нормируем
-    beta_vec = [beta]
-    ort_system.append(p/beta)
-
-#xL[i] = b[i-1]L[i-1] + a[i]L[i] + b[i]L[i+1]
-    for i in range(1, deg):
-        t1, _ = quad(lambda x: ort_system[i](x) * ort_system[i](x) * x, -1, 1)
-        t2, _ = quad(lambda x: ort_system[i](x) * ort_system[i](x), -1, 1)
-        alpha = t1 / t2
-        alpha_vec.append(alpha)
-        p = Polynomial([0., 1.]) * ort_system[i] - alpha * ort_system[i] - beta_vec[i-1] * ort_system[i-1]
-        t, _ = quad(lambda x: p(x) * p(x), -1, 1)
-        beta = t ** 0.5
-        beta_vec.append(beta)
-        ort_system.append(p / beta)
-
-    A = np.zeros((deg, deg))
-    for i in range (deg):
-        A[i, i] = alpha_vec[i]
-        if i > 0:
-            A[i, i - 1] = beta_vec[i - 1]
-        if i < deg - 1:
-            A[i, i + 1] = beta_vec[i]
-    eig_values, _ = np.linalg.eig(A)
-    return ort_system, eig_values
-
-#Тесты
-eps = 10 ** (-5)
-deg_P = 4
-
-orthogonal_system = Gram_Schmidt_method(deg_P)
-assert(orthogonality_test(orthogonal_system, deg_P, eps))
-print("Первый тест пройден")
-
-orthogonal_system, eig_values = recurrence_method(deg_P)
-assert(orthogonality_test(orthogonal_system, deg_P, eps))
-print("Второй тест пройден")
-
-assert(eigenvalues_test(orthogonal_system[deg_P], eig_values, eps))
-print("Третий тест пройден")
+x = np.linspace(-1, 1, 50)
+plt.plot(x, pol(x), label = 'исходный')
+plt.plot(x, res(x), label = 'интерполянт')
+plt.legend()
+plt.grid()
+plt.show()
